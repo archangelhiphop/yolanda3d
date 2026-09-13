@@ -3,37 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Interactive Painting</title>
+<title>Yolanda — Interactive 3D</title>
 <style>
-  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
-
-  #animation_container {
-    position: absolute;
-    margin: auto;
-    left: 0; right: 0;
-    top: 0; bottom: 0;
+  html, body {
+    margin: 0; padding: 0;
+    background: #1c1c1c;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+    height: 100%;
   }
-
-  #canvas { touch-action: none; display: block; }
+  #canvas-wrap { position: absolute; inset: 0; touch-action: none; }
 
   #_preload_div_ {
-    position: absolute;
-    top: 0; left: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #ccc;
-    font-family: sans-serif;
-    font-size: 14px;
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: #ccc; font-size: 14px;
   }
 
-  /* ---- Positioning-mode toolbar (only shows with ?edit=1 in the URL) ---- */
   #editBar {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
+    position: fixed; bottom: 0; left: 0; right: 0;
     background: rgba(0,0,0,0.85);
     color: #fff;
-    font-family: -apple-system, sans-serif;
     font-size: 13px;
     padding: 10px 14px;
     display: none;
@@ -54,12 +44,10 @@
     cursor: pointer;
   }
   #editBar span { opacity: 0.7; }
-  #editBar .selected-label { color: #c9a45c; font-weight: 600; min-width: 90px; }
+  #editBar .selected-label { color: #c9a45c; font-weight: 600; min-width: 100px; }
   #layoutOutput {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    max-height: 40vh;
-    overflow: auto;
+    position: fixed; top: 0; left: 0; right: 0;
+    max-height: 40vh; overflow: auto;
     background: rgba(0,0,0,0.92);
     color: #9fe39f;
     font-family: 'SF Mono', Menlo, monospace;
@@ -70,224 +58,461 @@
     z-index: 1000;
   }
   #layoutOutput.active { display: block; }
+
+  #hintBar {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 12px 16px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+    color: #f4ede2;
+    font-size: 12.5px;
+    line-height: 1.5;
+    z-index: 9;
+    pointer-events: none;
+  }
+  #hintBar .hint { color: #c9a45c; font-weight: 600; }
+
+  #fullscreenBtn {
+    position: fixed; top: 14px; right: 16px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: #f4ede2;
+    width: 40px; height: 40px;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+    z-index: 20;
+  }
 </style>
 </head>
-<body onload="init();">
+<body>
 
-<div id="animation_container">
-  <canvas id="canvas" width="700" height="950" style="display:none;"></canvas>
-  <div id="dom_overlay_container" style="pointer-events:none; overflow:hidden; position:absolute; left:0; top:0;"></div>
-</div>
+<div id="canvas-wrap"></div>
 <div id="_preload_div_">Loading…</div>
 
+<button id="fullscreenBtn" title="Fullscreen">⛶</button>
+
+<div id="hintBar">
+  On a <span class="hint">piece</span>: drag to move, pinch to push/pull, double-tap to rotate.<br>
+  On the <span class="hint">background</span>: drag to orbit the view, pinch to zoom.
+</div>
+
 <div id="editBar">
-  <span>Positioning mode — drag pieces, tap one to select it, then resize:</span>
+  <span>Positioning mode:</span>
   <span class="selected-label" id="selectedLabel">none selected</span>
   <button onclick="adjustScale(-0.01)">− Smaller</button>
   <button onclick="adjustScale(0.01)">+ Bigger</button>
-  <button onclick="exportLayout()">Copy Layout</button>
+  <button onclick="adjustRotation('x', -90)">Tilt X−</button>
+  <button onclick="adjustRotation('x', 90)">Tilt X+</button>
+  <button onclick="adjustRotation('y', -90)">Turn Y−</button>
+  <button onclick="adjustRotation('y', 90)">Turn Y+</button>
+  <button onclick="adjustRotation('z', -90)">Spin Z−</button>
+  <button onclick="adjustRotation('z', 90)">Spin Z+</button>
 </div>
 <pre id="layoutOutput"></pre>
 
-<script src="https://code.createjs.com/1.0.0/createjs.min.js"></script>
-
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 /* =====================================================================
-   CONFIG — this is the only section you edit for each new painting.
+   CONFIG — reused from the finalized 2D Viandas layout. x/y carried
+   over directly (converted to a centered, y-up coordinate system);
+   z starts at 0 for every piece — use pinch in positioning mode to
+   pull pieces forward or push them back from there.
    ===================================================================== */
 const CONFIG = {
-  width: 700,
-  height: 950,
-  backgroundColor: "#1c1c1c",
   background: "blackpapertexture.png",
-  backgroundRotation: 0, // degrees — set to 90 if the background looks sideways
-  backgroundOverfill: 1.08, // scales background slightly beyond canvas edges to hide soft/transparent borders
+  backgroundRotation: 0,   // this piece's background was already upright in the 2D version
+  backgroundOverfill: 1.08,
+  pieceThickness: 20,
   pieces: [
-    { id: "profile",    src: "profile.png",    x: 522.0, y: 345.5, rotation: 0, scale: 0.180 },
-    { id: "tablecloth", src: "tablecloth.png", x: 468.5, y: 156.5, rotation: 0, scale: 0.180 },
-    { id: "yellow2",    src: "yellow2.png",    x: 415.0, y: 250.0, rotation: 0, scale: 0.170 },
-    { id: "yellow1",    src: "yellow1.png",    x: 446.5, y: 251.0, rotation: 0, scale: 0.170 },
-    { id: "green",      src: "green.png",      x: 473.5, y: 586.5, rotation: 90, scale: 0.180 },
-    { id: "bag",        src: "bag.png",        x: 404.0, y: 691.0, rotation: 0, scale: 0.180 },
-    { id: "cup",        src: "cup.png",        x: 269.5, y: 598.0, rotation: 0, scale: 0.180 },
-    { id: "mouth",      src: "mouth.png",      x: 474.0, y: 509.5, rotation: 0, scale: 0.180 },
-    { id: "face",       src: "face.png",       x: 321.0, y: 360.5, rotation: 0, scale: 0.180 },
-    { id: "arroz",      src: "arroz.png",      x: 267.5, y: 219.5, rotation: 0, scale: 0.180 },
-    { id: "spoon",      src: "spoon.png",      x: 115.0, y: 448.5, rotation: 0, scale: 0.180 },
+    { id: "profile",    src: "profile.png",    x: 172.0,  y: 129.5,  z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "tablecloth", src: "tablecloth.png", x: 118.5,  y: 318.5,  z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "yellow2",    src: "yellow2.png",    x: 65.0,   y: 225.0,  z: 0, rotationZ: 0,  scale: 0.170 },
+    { id: "yellow1",    src: "yellow1.png",    x: 96.5,   y: 224.0,  z: 0, rotationZ: 0,  scale: 0.170 },
+    { id: "green",      src: "green.png",      x: 123.5,  y: -111.5, z: 0, rotationZ: 90, scale: 0.180 },
+    { id: "bag",        src: "bag.png",        x: 54.0,   y: -216.0, z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "cup",        src: "cup.png",        x: -80.5,  y: -123.0, z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "mouth",      src: "mouth.png",      x: 124.0,  y: -34.5,  z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "face",       src: "face.png",       x: -29.0,  y: 114.5,  z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "arroz",      src: "arroz.png",      x: -82.5,  y: 255.5,  z: 0, rotationZ: 0,  scale: 0.180 },
+    { id: "spoon",      src: "spoon.png",      x: -235.0, y: 26.5,   z: 0, rotationZ: 0,  scale: 0.180 },
   ]
 };
 /* ===================================================================== */
 
-var canvas, stage, preloaderDiv;
-var pieceObjects = {};
+const wrap = document.getElementById('canvas-wrap');
+const preloaderDiv = document.getElementById('_preload_div_');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1c1c1c);
 
-function init() {
-  canvas = document.getElementById("canvas");
-  canvas.width = CONFIG.width;
-  canvas.height = CONFIG.height;
-  preloaderDiv = document.getElementById("_preload_div_");
-  document.getElementById("animation_container").style.width = CONFIG.width + "px";
-  document.getElementById("animation_container").style.height = CONFIG.height + "px";
-  document.getElementById("animation_container").style.backgroundColor = "transparent";
+const camera = new THREE.PerspectiveCamera(45, wrap.clientWidth / wrap.clientHeight, 1, 4000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+wrap.appendChild(renderer.domElement);
 
-  var manifest = CONFIG.pieces.map(p => ({ src: p.src, id: p.id }));
-  if (CONFIG.background) manifest.unshift({ src: CONFIG.background, id: "__background__" });
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.55);
+dirLight.position.set(150, 200, 400);
+scene.add(dirLight);
 
-  var loader = new createjs.LoadQueue(false);
-  loader.addEventListener("complete", handleComplete);
-  loader.addEventListener("progress", function(evt) {
-    preloaderDiv.textContent = "Loading… " + Math.round(evt.progress * 100) + "%";
-  });
-  loader.loadManifest(manifest);
-}
-
-function handleComplete(evt) {
-  var queue = evt.target;
-  preloaderDiv.style.display = "none";
-  canvas.style.display = "block";
-
-  stage = new createjs.Stage(canvas);
-  stage.enableMouseOver();
-  createjs.Touch.enable(stage);
-
-  if (CONFIG.background) {
-    var bgImg = queue.getResult("__background__");
-    var bg = new createjs.Bitmap(bgImg);
-    var rot = CONFIG.backgroundRotation || 0;
-    bg.regX = bgImg.width / 2;
-    bg.regY = bgImg.height / 2;
-    bg.rotation = rot;
-    if (rot % 180 !== 0) {
-      bg.scaleX = CONFIG.height / bgImg.width;
-      bg.scaleY = CONFIG.width / bgImg.height;
-    } else {
-      bg.scaleX = CONFIG.width / bgImg.width;
-      bg.scaleY = CONFIG.height / bgImg.height;
-    }
-    var overfill = CONFIG.backgroundOverfill || 1;
-    bg.scaleX *= overfill;
-    bg.scaleY *= overfill;
-    bg.x = CONFIG.width / 2;
-    bg.y = CONFIG.height / 2;
-    stage.addChild(bg);
+/* ---------------- Wood-grain placeholder texture for piece edges ---------------- */
+function makeWoodTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#5c4128';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 40; i++) {
+    const y = Math.random() * 256;
+    const h = 1 + Math.random() * 3;
+    const shade = 70 + Math.random() * 60;
+    ctx.fillStyle = 'rgba(' + shade + ',' + (shade * 0.65) + ',' + (shade * 0.4) + ',' + (0.25 + Math.random() * 0.3) + ')';
+    ctx.fillRect(0, y, 256, h);
   }
+  for (let i = 0; i < 8; i++) {
+    const y = Math.random() * 256;
+    ctx.strokeStyle = 'rgba(35,22,12,0.4)';
+    ctx.lineWidth = 1 + Math.random();
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    for (let x = 0; x <= 256; x += 16) ctx.lineTo(x, y + (Math.random() - 0.5) * 6);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+const woodTexture = makeWoodTexture();
 
-  CONFIG.pieces.forEach(function(p) {
-    var img = queue.getResult(p.id);
-    var bmp = new createjs.Bitmap(img);
-    bmp.regX = img.width / 2;
-    bmp.regY = img.height / 2;
-    bmp.x = p.x;
-    bmp.y = p.y;
-    bmp.rotation = p.rotation || 0;
-    bmp.scaleX = bmp.scaleY = p.scale || 1;
-    bmp.name = p.id;
-    stage.addChild(bmp);
-    pieceObjects[p.id] = bmp;
-    enableDragAndDoubleTap(bmp);
-  });
+/* ---------------- Load background + all pieces ---------------- */
+const loader = new THREE.TextureLoader();
+let totalToLoad = CONFIG.pieces.length + (CONFIG.background ? 1 : 0);
+let loadedCount = 0;
+let failedFiles = [];
+const pieces = [];
 
-  createjs.Ticker.framerate = 30;
-  createjs.Ticker.addEventListener("tick", stage);
-
-  makeResponsive();
-  window.addEventListener("resize", makeResponsive);
+function onAssetLoaded() {
+  loadedCount++;
+  if (failedFiles.length === 0) {
+    preloaderDiv.textContent = 'Loading… ' + Math.round((loadedCount / totalToLoad) * 100) + '%';
+  }
+  if (loadedCount >= totalToLoad) {
+    if (failedFiles.length > 0) {
+      preloaderDiv.textContent = 'Could not load: ' + failedFiles.join(', ') + ' — check filenames and that they were uploaded.';
+    } else {
+      preloaderDiv.style.display = 'none';
+    }
+    animate();
+  }
 }
 
-function enableDragAndDoubleTap(target) {
-  var lastTapTime = 0;
-  var startX = 0, startY = 0, moved = false;
-  var TAP_MOVE_THRESHOLD = 6;
-  var DOUBLE_TAP_WINDOW = 350;
-
-  target.on('mousedown', function(evt) {
-    selectedPieceId = target.name;
-    updateSelectedLabel();
-
-    var offsetX = target.x - evt.stageX;
-    var offsetY = target.y - evt.stageY;
-    startX = evt.stageX;
-    startY = evt.stageY;
-    moved = false;
-
-    target.on('pressmove', function(evt) {
-      var dx = evt.stageX - startX;
-      var dy = evt.stageY - startY;
-      if (Math.abs(dx) > TAP_MOVE_THRESHOLD || Math.abs(dy) > TAP_MOVE_THRESHOLD) moved = true;
-      target.x = evt.stageX + offsetX;
-      target.y = evt.stageY + offsetY;
-      stage.update();
-    });
-
-    target.on('pressup', function(evt) {
-      target.off('pressmove');
-      stage.update();
-      if (!moved) {
-        var currentTime = new Date().getTime();
-        var tapLength = currentTime - lastTapTime;
-        if (tapLength < DOUBLE_TAP_WINDOW && tapLength > 0) {
-          target.rotation += 90;
-          stage.update();
-          lastTapTime = 0;
-        } else {
-          lastTapTime = currentTime;
-        }
-      }
-    });
+if (CONFIG.background) {
+  loader.load(CONFIG.background, function(tex) {
+    const img = tex.image;
+    const bg = new THREE.Mesh(
+      new THREE.PlaneGeometry(img.width, img.height),
+      new THREE.MeshStandardMaterial({ map: tex })
+    );
+    const rot = CONFIG.backgroundRotation || 0;
+    bg.rotation.z = THREE.MathUtils.degToRad(rot);
+    // Scale so the panel fully covers the working area regardless of source orientation/size
+    const targetSize = 950;
+    const fitScale = (rot % 180 !== 0)
+      ? Math.max(targetSize / img.height, targetSize / img.width)
+      : Math.max(targetSize / img.width, targetSize / img.height);
+    const overfill = CONFIG.backgroundOverfill || 1;
+    bg.scale.set(fitScale * overfill, fitScale * overfill, 1);
+    bg.position.z = -150;
+    scene.add(bg);
+    onAssetLoaded();
+  }, undefined, function(err) {
+    console.error('Failed to load background:', CONFIG.background, err);
+    failedFiles.push(CONFIG.background);
+    onAssetLoaded();
   });
 }
 
-function makeResponsive() {
-  var w = CONFIG.width, h = CONFIG.height;
-  var iw = window.innerWidth, ih = window.innerHeight;
-  var sRatio = Math.min(iw / w, ih / h, 1);
-  canvas.style.width = (w * sRatio) + "px";
-  canvas.style.height = (h * sRatio) + "px";
-  document.getElementById("animation_container").style.width = (w * sRatio) + "px";
-  document.getElementById("animation_container").style.height = (h * sRatio) + "px";
-  canvas.width = w * sRatio * (window.devicePixelRatio || 1);
-  canvas.height = h * sRatio * (window.devicePixelRatio || 1);
-  stage.scaleX = stage.scaleY = sRatio * (window.devicePixelRatio || 1);
-  stage.update();
+CONFIG.pieces.forEach(function(p) {
+  loader.load(p.src, function(tex) {
+    tex.minFilter = THREE.LinearFilter;
+    const img = tex.image;
+    const w = img.width * p.scale;
+    const h = img.height * p.scale;
+
+    let mesh;
+    if (p.flat) {
+      // Some shapes (thin, irregular silhouettes) don't read well as a
+      // chunky box — render these as a plain flat, double-sided image instead.
+      const frontMat = new THREE.MeshStandardMaterial({
+        map: tex,
+        transparent: true,
+        alphaTest: 0.05,
+        side: THREE.DoubleSide
+      });
+      mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), frontMat);
+    } else {
+      const frontMat = new THREE.MeshStandardMaterial({
+        map: tex,
+        transparent: true,
+        alphaTest: 0.05
+      });
+      const sideMat = new THREE.MeshStandardMaterial({ map: woodTexture });
+      const materials = [sideMat, sideMat, sideMat, sideMat, frontMat, sideMat];
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, CONFIG.pieceThickness), materials);
+    }
+
+    mesh.position.set(p.x, p.y, p.z);
+    mesh.rotation.x = THREE.MathUtils.degToRad(p.rotationX || 0);
+    mesh.rotation.y = THREE.MathUtils.degToRad(p.rotationY || 0);
+    mesh.rotation.z = THREE.MathUtils.degToRad(p.rotationZ || 0);
+    mesh.userData.id = p.id;
+    mesh.userData.src = p.src;
+    mesh.userData.baseW = img.width;
+    mesh.userData.baseH = img.height;
+    mesh.userData.flat = !!p.flat;
+    mesh.userData.targetRotationX = mesh.rotation.x;
+    mesh.userData.targetRotationY = mesh.rotation.y;
+    mesh.userData.targetRotationZ = mesh.rotation.z;
+    scene.add(mesh);
+    pieces.push(mesh);
+    onAssetLoaded();
+  }, undefined, function(err) {
+    console.error('Failed to load piece:', p.src, err);
+    failedFiles.push(p.src);
+    onAssetLoaded();
+  });
+});
+
+/* ---------------- Orbit camera (background drag/pinch) ---------------- */
+const target = new THREE.Vector3(0, 0, 0);
+let radius = 950, theta = 0.5, phi = 1.2;
+const MIN_RADIUS = 300, MAX_RADIUS = 2000;
+const MIN_PHI = 0.15, MAX_PHI = Math.PI - 0.15;
+
+function updateCameraFromOrbit() {
+  camera.position.x = target.x + radius * Math.sin(phi) * Math.sin(theta);
+  camera.position.y = target.y + radius * Math.cos(phi);
+  camera.position.z = target.z + radius * Math.sin(phi) * Math.cos(theta);
+  camera.lookAt(target);
+}
+updateCameraFromOrbit();
+
+function animate() {
+  requestAnimationFrame(animate);
+  pieces.forEach(function(m) {
+    m.rotation.x += (m.userData.targetRotationX - m.rotation.x) * 0.15;
+    m.rotation.y += (m.userData.targetRotationY - m.rotation.y) * 0.15;
+    m.rotation.z += (m.userData.targetRotationZ - m.rotation.z) * 0.15;
+  });
+  renderer.render(scene, camera);
 }
 
-/* ---- Positioning mode: add ?edit=1 to the URL to turn this on ---- */
-var selectedPieceId = null;
+window.addEventListener('resize', () => {
+  camera.aspect = wrap.clientWidth / wrap.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+});
+
+/* ---------------- Interaction ---------------- */
+const raycaster = new THREE.Raycaster();
+let selected = null;
+let selectedPieceId = null;
 
 if (window.location.search.includes("edit=1")) {
   document.getElementById("editBar").classList.add("active");
 }
 
+/* ---------------- Fullscreen toggle ---------------- */
+const fullscreenBtn = document.getElementById('fullscreenBtn');
+fullscreenBtn.addEventListener('click', () => {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+
 function updateSelectedLabel() {
-  var label = document.getElementById("selectedLabel");
-  label.textContent = selectedPieceId ? selectedPieceId : "none selected";
+  document.getElementById('selectedLabel').textContent = selectedPieceId ? selectedPieceId : 'none selected';
+}
+
+function adjustRotation(axis, degrees) {
+  if (!selected) return;
+  const rad = THREE.MathUtils.degToRad(degrees);
+  if (axis === 'x') selected.userData.targetRotationX += rad;
+  if (axis === 'y') selected.userData.targetRotationY += rad;
+  if (axis === 'z') selected.userData.targetRotationZ += rad;
 }
 
 function adjustScale(delta) {
-  if (!selectedPieceId || !pieceObjects[selectedPieceId]) return;
-  var bmp = pieceObjects[selectedPieceId];
-  var newScale = Math.max(0.02, bmp.scaleX + delta);
-  bmp.scaleX = bmp.scaleY = newScale;
-  stage.update();
+  if (!selected) return;
+  const p = CONFIG.pieces.find(pc => pc.id === selectedPieceId);
+  p.scale = Math.max(0.02, p.scale + delta);
+  selected.geometry.dispose();
+  selected.geometry = new THREE.BoxGeometry(
+    selected.userData.baseW * p.scale,
+    selected.userData.baseH * p.scale,
+    CONFIG.pieceThickness
+  );
 }
 
-function exportLayout() {
-  var lines = CONFIG.pieces.map(function(p) {
-    var bmp = pieceObjects[p.id];
-    var rot = ((bmp.rotation % 360) + 360) % 360;
-    var scl = bmp.scaleX.toFixed(3);
-    return '    { id: "' + p.id + '", src: "' + p.src + '", x: ' +
-      bmp.x.toFixed(1) + ', y: ' + bmp.y.toFixed(1) + ', rotation: ' + rot + ', scale: ' + scl + ' },';
-  });
-  var output = "pieces: [\n" + lines.join("\n") + "\n  ]";
-  var out = document.getElementById("layoutOutput");
-  out.textContent = output;
-  out.classList.add("active");
+function getNDC(clientX, clientY) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  return new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1
+  );
+}
 
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(output);
+function pickPiece(clientX, clientY) {
+  const ndc = getNDC(clientX, clientY);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(pieces);
+  return hits.length ? hits[0].object : null;
+}
+
+let dragStart = null;
+let moved = false;
+let lastTapTime = 0;
+const TAP_MOVE_THRESHOLD = 8;
+const DOUBLE_TAP_WINDOW = 350;
+
+let activePointers = new Map();
+let interactionTarget = null;
+let pinchStartDist = null;
+let pinchStartZ = null;
+let orbitStart = null;
+
+function pointerDist(pts) {
+  const arr = Array.from(pts.values());
+  const dx = arr[0].x - arr[1].x;
+  const dy = arr[0].y - arr[1].y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  renderer.domElement.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (activePointers.size === 1) {
+    const hit = pickPiece(e.clientX, e.clientY);
+    if (hit) {
+      selected = hit;
+      selectedPieceId = hit.userData.id;
+      interactionTarget = 'piece';
+      updateSelectedLabel();
+    } else {
+      interactionTarget = 'background';
+    }
+    dragStart = { x: e.clientX, y: e.clientY };
+    orbitStart = { theta, phi, x: e.clientX, y: e.clientY };
+    moved = false;
   }
+
+  if (activePointers.size === 2) {
+    pinchStartDist = pointerDist(activePointers);
+    pinchStartZ = (interactionTarget === 'piece' && selected) ? selected.position.z : null;
+  }
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (activePointers.size === 1 && dragStart) {
+    const dx = e.clientX - dragStart.x;
+    const dy = e.clientY - dragStart.y;
+    if (Math.abs(dx) > TAP_MOVE_THRESHOLD || Math.abs(dy) > TAP_MOVE_THRESHOLD) moved = true;
+
+    if (interactionTarget === 'piece' && selected) {
+      const depthScale = (radius - selected.position.z) / radius;
+      selected.position.x += dx * depthScale;
+      selected.position.y -= dy * depthScale;
+      dragStart = { x: e.clientX, y: e.clientY };
+    } else if (interactionTarget === 'background' && orbitStart) {
+      const totalDx = e.clientX - orbitStart.x;
+      const totalDy = e.clientY - orbitStart.y;
+      theta = orbitStart.theta - totalDx * 0.008;
+      phi = Math.max(MIN_PHI, Math.min(MAX_PHI, orbitStart.phi - totalDy * 0.008));
+      updateCameraFromOrbit();
+    }
+  }
+
+  if (activePointers.size === 2) {
+    const dist = pointerDist(activePointers);
+    if (interactionTarget === 'piece' && selected && pinchStartDist) {
+      const delta = (dist - pinchStartDist) * 0.6;
+      selected.position.z = pinchStartZ + delta;
+    } else if (interactionTarget === 'background' && pinchStartDist) {
+      const delta = (dist - pinchStartDist);
+      radius = Math.max(MIN_RADIUS, Math.min(MAX_RADIUS, radius - delta * 1.5));
+      updateCameraFromOrbit();
+      pinchStartDist = dist;
+    }
+  }
+});
+
+function endPointer(e) {
+  activePointers.delete(e.pointerId);
+  pinchStartDist = null;
+
+  if (activePointers.size === 0) {
+    if (interactionTarget === 'piece' && selected && !moved) {
+      const now = Date.now();
+      if (now - lastTapTime < DOUBLE_TAP_WINDOW) {
+        selected.userData.targetRotationZ += Math.PI / 2;
+        lastTapTime = 0;
+      } else {
+        lastTapTime = now;
+      }
+    }
+    interactionTarget = null;
+  }
+  dragStart = null;
+  orbitStart = null;
 }
+
+renderer.domElement.addEventListener('pointerup', endPointer);
+renderer.domElement.addEventListener('pointercancel', endPointer);
+
+renderer.domElement.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const hover = pickPiece(e.clientX, e.clientY);
+  if (hover) {
+    hover.position.z -= e.deltaY * 0.5;
+  } else {
+    radius = Math.max(MIN_RADIUS, Math.min(MAX_RADIUS, radius + e.deltaY * 1.2));
+    updateCameraFromOrbit();
+  }
+}, { passive: false });
+
+/* ---------------- Export current layout (positioning mode) ---------------- */
+function exportLayout() {
+  function norm360(rad) {
+    return (((THREE.MathUtils.radToDeg(rad) % 360) + 360) % 360).toFixed(0);
+  }
+  const lines = CONFIG.pieces.map(function(p) {
+    const mesh = pieces.find(m => m.userData.id === p.id);
+    const rotX = norm360(mesh.userData.targetRotationX);
+    const rotY = norm360(mesh.userData.targetRotationY);
+    const rotZ = norm360(mesh.userData.targetRotationZ);
+    const flatPart = p.flat ? ', flat: true' : '';
+    return '    { id: "' + p.id + '", src: "' + p.src + '", x: ' +
+      mesh.position.x.toFixed(1) + ', y: ' + mesh.position.y.toFixed(1) + ', z: ' + mesh.position.z.toFixed(1) +
+      ', rotationX: ' + rotX + ', rotationY: ' + rotY + ', rotationZ: ' + rotZ +
+      ', scale: ' + p.scale.toFixed(3) + flatPart + ' },';
+  });
+  const output = "pieces: [\n" + lines.join("\n") + "\n  ]";
+  const out = document.getElementById('layoutOutput');
+  out.textContent = output;
+  out.classList.add('active');
+  if (navigator.clipboard) navigator.clipboard.writeText(output);
+  console.log(output);
+}
+// Not exposed as a visible button — call exportLayout() from the browser
+// console (right-click → Inspect → Console) when you personally want to
+// save the current arrangement. Visitors have no way to trigger this.
+window.exportLayout = exportLayout;
 </script>
 
 </body>
