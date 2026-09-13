@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Interactive Painting</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+
+  #animation_container {
+    position: absolute;
+    margin: auto;
+    left: 0; right: 0;
+    top: 0; bottom: 0;
+  }
+
+  #canvas { touch-action: none; display: block; }
+
+  #_preload_div_ {
+    position: absolute;
+    top: 0; left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ccc;
+    font-family: sans-serif;
+    font-size: 14px;
+  }
+
+  /* ---- Positioning-mode toolbar (only shows with ?edit=1 in the URL) ---- */
+  #editBar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.85);
+    color: #fff;
+    font-family: -apple-system, sans-serif;
+    font-size: 13px;
+    padding: 10px 14px;
+    display: none;
+    align-items: center;
+    gap: 12px;
+    z-index: 999;
+    flex-wrap: wrap;
+  }
+  #editBar.active { display: flex; }
+  #editBar button {
+    background: #c9a45c;
+    border: none;
+    color: #111;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #editBar span { opacity: 0.7; }
+  #editBar .selected-label { color: #c9a45c; font-weight: 600; min-width: 90px; }
+  #layoutOutput {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    max-height: 40vh;
+    overflow: auto;
+    background: rgba(0,0,0,0.92);
+    color: #9fe39f;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    padding: 14px;
+    white-space: pre-wrap;
+    display: none;
+    z-index: 1000;
+  }
+  #layoutOutput.active { display: block; }
+</style>
+</head>
+<body onload="init();">
+
+<div id="animation_container">
+  <canvas id="canvas" width="700" height="950" style="display:none;"></canvas>
+  <div id="dom_overlay_container" style="pointer-events:none; overflow:hidden; position:absolute; left:0; top:0;"></div>
+</div>
+<div id="_preload_div_">Loading…</div>
+
+<div id="editBar">
+  <span>Positioning mode — drag pieces, tap one to select it, then resize:</span>
+  <span class="selected-label" id="selectedLabel">none selected</span>
+  <button onclick="adjustScale(-0.01)">− Smaller</button>
+  <button onclick="adjustScale(0.01)">+ Bigger</button>
+  <button onclick="exportLayout()">Copy Layout</button>
+</div>
+<pre id="layoutOutput"></pre>
+
+<script src="https://code.createjs.com/1.0.0/createjs.min.js"></script>
+
+<script>
+/* =====================================================================
+   CONFIG — this is the only section you edit for each new painting.
+   ===================================================================== */
+const CONFIG = {
+  width: 700,
+  height: 950,
+  backgroundColor: "#1c1c1c",
+  background: "blackpapertexture.png",
+  backgroundRotation: 0, // degrees — set to 90 if the background looks sideways
+  backgroundOverfill: 1.08, // scales background slightly beyond canvas edges to hide soft/transparent borders
+  pieces: [
+    { id: "profile",    src: "profile.png",    x: 522.0, y: 345.5, rotation: 0, scale: 0.180 },
+    { id: "tablecloth", src: "tablecloth.png", x: 468.5, y: 156.5, rotation: 0, scale: 0.180 },
+    { id: "yellow2",    src: "yellow2.png",    x: 415.0, y: 250.0, rotation: 0, scale: 0.170 },
+    { id: "yellow1",    src: "yellow1.png",    x: 446.5, y: 251.0, rotation: 0, scale: 0.170 },
+    { id: "green",      src: "green.png",      x: 473.5, y: 586.5, rotation: 90, scale: 0.180 },
+    { id: "bag",        src: "bag.png",        x: 404.0, y: 691.0, rotation: 0, scale: 0.180 },
+    { id: "cup",        src: "cup.png",        x: 269.5, y: 598.0, rotation: 0, scale: 0.180 },
+    { id: "mouth",      src: "mouth.png",      x: 474.0, y: 509.5, rotation: 0, scale: 0.180 },
+    { id: "face",       src: "face.png",       x: 321.0, y: 360.5, rotation: 0, scale: 0.180 },
+    { id: "arroz",      src: "arroz.png",      x: 267.5, y: 219.5, rotation: 0, scale: 0.180 },
+    { id: "spoon",      src: "spoon.png",      x: 115.0, y: 448.5, rotation: 0, scale: 0.180 },
+  ]
+};
+/* ===================================================================== */
+
+var canvas, stage, preloaderDiv;
+var pieceObjects = {};
+
+function init() {
+  canvas = document.getElementById("canvas");
+  canvas.width = CONFIG.width;
+  canvas.height = CONFIG.height;
+  preloaderDiv = document.getElementById("_preload_div_");
+  document.getElementById("animation_container").style.width = CONFIG.width + "px";
+  document.getElementById("animation_container").style.height = CONFIG.height + "px";
+  document.getElementById("animation_container").style.backgroundColor = "transparent";
+
+  var manifest = CONFIG.pieces.map(p => ({ src: p.src, id: p.id }));
+  if (CONFIG.background) manifest.unshift({ src: CONFIG.background, id: "__background__" });
+
+  var loader = new createjs.LoadQueue(false);
+  loader.addEventListener("complete", handleComplete);
+  loader.addEventListener("progress", function(evt) {
+    preloaderDiv.textContent = "Loading… " + Math.round(evt.progress * 100) + "%";
+  });
+  loader.loadManifest(manifest);
+}
+
+function handleComplete(evt) {
+  var queue = evt.target;
+  preloaderDiv.style.display = "none";
+  canvas.style.display = "block";
+
+  stage = new createjs.Stage(canvas);
+  stage.enableMouseOver();
+  createjs.Touch.enable(stage);
+
+  if (CONFIG.background) {
+    var bgImg = queue.getResult("__background__");
+    var bg = new createjs.Bitmap(bgImg);
+    var rot = CONFIG.backgroundRotation || 0;
+    bg.regX = bgImg.width / 2;
+    bg.regY = bgImg.height / 2;
+    bg.rotation = rot;
+    if (rot % 180 !== 0) {
+      bg.scaleX = CONFIG.height / bgImg.width;
+      bg.scaleY = CONFIG.width / bgImg.height;
+    } else {
+      bg.scaleX = CONFIG.width / bgImg.width;
+      bg.scaleY = CONFIG.height / bgImg.height;
+    }
+    var overfill = CONFIG.backgroundOverfill || 1;
+    bg.scaleX *= overfill;
+    bg.scaleY *= overfill;
+    bg.x = CONFIG.width / 2;
+    bg.y = CONFIG.height / 2;
+    stage.addChild(bg);
+  }
+
+  CONFIG.pieces.forEach(function(p) {
+    var img = queue.getResult(p.id);
+    var bmp = new createjs.Bitmap(img);
+    bmp.regX = img.width / 2;
+    bmp.regY = img.height / 2;
+    bmp.x = p.x;
+    bmp.y = p.y;
+    bmp.rotation = p.rotation || 0;
+    bmp.scaleX = bmp.scaleY = p.scale || 1;
+    bmp.name = p.id;
+    stage.addChild(bmp);
+    pieceObjects[p.id] = bmp;
+    enableDragAndDoubleTap(bmp);
+  });
+
+  createjs.Ticker.framerate = 30;
+  createjs.Ticker.addEventListener("tick", stage);
+
+  makeResponsive();
+  window.addEventListener("resize", makeResponsive);
+}
+
+function enableDragAndDoubleTap(target) {
+  var lastTapTime = 0;
+  var startX = 0, startY = 0, moved = false;
+  var TAP_MOVE_THRESHOLD = 6;
+  var DOUBLE_TAP_WINDOW = 350;
+
+  target.on('mousedown', function(evt) {
+    selectedPieceId = target.name;
+    updateSelectedLabel();
+
+    var offsetX = target.x - evt.stageX;
+    var offsetY = target.y - evt.stageY;
+    startX = evt.stageX;
+    startY = evt.stageY;
+    moved = false;
+
+    target.on('pressmove', function(evt) {
+      var dx = evt.stageX - startX;
+      var dy = evt.stageY - startY;
+      if (Math.abs(dx) > TAP_MOVE_THRESHOLD || Math.abs(dy) > TAP_MOVE_THRESHOLD) moved = true;
+      target.x = evt.stageX + offsetX;
+      target.y = evt.stageY + offsetY;
+      stage.update();
+    });
+
+    target.on('pressup', function(evt) {
+      target.off('pressmove');
+      stage.update();
+      if (!moved) {
+        var currentTime = new Date().getTime();
+        var tapLength = currentTime - lastTapTime;
+        if (tapLength < DOUBLE_TAP_WINDOW && tapLength > 0) {
+          target.rotation += 90;
+          stage.update();
+          lastTapTime = 0;
+        } else {
+          lastTapTime = currentTime;
+        }
+      }
+    });
+  });
+}
+
+function makeResponsive() {
+  var w = CONFIG.width, h = CONFIG.height;
+  var iw = window.innerWidth, ih = window.innerHeight;
+  var sRatio = Math.min(iw / w, ih / h, 1);
+  canvas.style.width = (w * sRatio) + "px";
+  canvas.style.height = (h * sRatio) + "px";
+  document.getElementById("animation_container").style.width = (w * sRatio) + "px";
+  document.getElementById("animation_container").style.height = (h * sRatio) + "px";
+  canvas.width = w * sRatio * (window.devicePixelRatio || 1);
+  canvas.height = h * sRatio * (window.devicePixelRatio || 1);
+  stage.scaleX = stage.scaleY = sRatio * (window.devicePixelRatio || 1);
+  stage.update();
+}
+
+/* ---- Positioning mode: add ?edit=1 to the URL to turn this on ---- */
+var selectedPieceId = null;
+
+if (window.location.search.includes("edit=1")) {
+  document.getElementById("editBar").classList.add("active");
+}
+
+function updateSelectedLabel() {
+  var label = document.getElementById("selectedLabel");
+  label.textContent = selectedPieceId ? selectedPieceId : "none selected";
+}
+
+function adjustScale(delta) {
+  if (!selectedPieceId || !pieceObjects[selectedPieceId]) return;
+  var bmp = pieceObjects[selectedPieceId];
+  var newScale = Math.max(0.02, bmp.scaleX + delta);
+  bmp.scaleX = bmp.scaleY = newScale;
+  stage.update();
+}
+
+function exportLayout() {
+  var lines = CONFIG.pieces.map(function(p) {
+    var bmp = pieceObjects[p.id];
+    var rot = ((bmp.rotation % 360) + 360) % 360;
+    var scl = bmp.scaleX.toFixed(3);
+    return '    { id: "' + p.id + '", src: "' + p.src + '", x: ' +
+      bmp.x.toFixed(1) + ', y: ' + bmp.y.toFixed(1) + ', rotation: ' + rot + ', scale: ' + scl + ' },';
+  });
+  var output = "pieces: [\n" + lines.join("\n") + "\n  ]";
+  var out = document.getElementById("layoutOutput");
+  out.textContent = output;
+  out.classList.add("active");
+
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(output);
+  }
+}
+</script>
+
+</body>
+</html>
